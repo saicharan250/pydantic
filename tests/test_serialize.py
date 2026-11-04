@@ -1511,3 +1511,54 @@ def test_model_serializer_when_used_fallback_respects_include_exclude() -> None:
         assert m.model_dump(exclude={'b'}) == {'a': 1}
         assert m.model_dump(include={'a'}) == {'a': 1}
         assert m.model_dump(mode='json', exclude={'b'}) == {'ser': True}
+
+
+@pytest.mark.parametrize('error_type', [ValueError, TypeError, RuntimeError])
+@pytest.mark.parametrize('mode', ['python', 'json', 'json_bytes'])
+def test_exclude_defaults_with_raising_equality(error_type, mode):
+    """https://github.com/pydantic/pydantic/issues/10547"""
+
+    class Value:
+        def __eq__(self, other):
+            raise error_type('not comparable')
+
+    class Model(BaseModel):
+        value: Annotated[Any, PlainSerializer(lambda value: 'present' if value is not None else None)] = None
+
+    model = Model(value=Value())
+    if mode == 'json_bytes':
+        assert json.loads(model.model_dump_json(exclude_defaults=True)) == {'value': 'present'}
+    else:
+        assert model.model_dump(mode=mode, exclude_defaults=True) == {'value': 'present'}
+    assert Model().model_dump(exclude_defaults=True) == {}
+
+
+@pytest.mark.parametrize('container_class', ['model', 'dataclass', 'typed_dict'], indirect=True)
+def test_exclude_defaults_with_ambiguous_equality(container_class):
+    """https://github.com/pydantic/pydantic/issues/10547"""
+    np = pytest.importorskip('numpy')
+    Array = Annotated[Any, PlainSerializer(lambda value: value.tolist(), return_type=list[int])]
+
+    class Container(container_class):
+        value: Array = None
+
+    adapter = TypeAdapter(Container)
+    value = np.array([1, 2])
+    instance = adapter.validate_python({'value': value})
+    assert adapter.dump_python(instance, exclude_defaults=True) == {'value': [1, 2]}
+    assert json.loads(adapter.dump_json(instance, exclude_defaults=True)) == {'value': [1, 2]}
+
+
+@pytest.mark.parametrize('error_type', [KeyboardInterrupt, SystemExit])
+def test_exclude_defaults_preserves_base_exception(error_type):
+    """https://github.com/pydantic/pydantic/issues/10547"""
+
+    class Value:
+        def __eq__(self, other):
+            raise error_type('stop')
+
+    class Model(BaseModel):
+        value: Any = None
+
+    with pytest.raises(error_type, match='stop'):
+        Model(value=Value()).model_dump(exclude_defaults=True)
