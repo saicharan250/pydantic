@@ -293,6 +293,8 @@ impl ModelValidator {
             };
             force_setattr(py, self_instance, intern!(py, DUNDER_FIELDS_SET_KEY), &fields_set)?;
             force_setattr(py, self_instance, root_field, &output)?;
+            force_setattr(py, self_instance, intern!(py, DUNDER_MODEL_EXTRA_KEY), py.None())?;
+            force_setattr(py, self_instance, intern!(py, DUNDER_MODEL_PRIVATE_KEY), py.None())?;
         } else {
             let (model_dict, model_extra, fields_set) = self.validate_inner_fields(py, input, state)?;
             set_model_attrs(self_instance, &model_dict, &model_extra, &fields_set)?;
@@ -336,6 +338,8 @@ impl ModelValidator {
             };
             force_setattr(py, &instance, intern!(py, DUNDER_FIELDS_SET_KEY), &fields_set)?;
             force_setattr(py, &instance, root_field, output)?;
+            force_setattr(py, &instance, intern!(py, DUNDER_MODEL_EXTRA_KEY), py.None())?;
+            force_setattr(py, &instance, intern!(py, DUNDER_MODEL_PRIVATE_KEY), py.None())?;
         } else {
             let (model_dict, model_extra, val_fields_set) = self.validate_inner_fields(py, input, state)?;
             instance = create_class(self.class.bind(py))?;

@@ -165,8 +165,8 @@ def test_extra():
 
     m = v.validate_python(1)
 
-    with pytest.raises(AttributeError):
-        _ = m.__pydantic_extra__
+    assert m.__pydantic_extra__ is None
+    assert m.__pydantic_private__ is None
 
 
 def test_fields_set():

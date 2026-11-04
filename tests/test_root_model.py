@@ -772,3 +772,105 @@ def test_type_checking_model_dump_signature_in_sync_with_base_model() -> None:
     assert module.RootModel.model_dump.__doc__ is not None
     assert BaseModel.model_dump.__doc__ is not None
     assert inspect.cleandoc(module.RootModel.model_dump.__doc__) == inspect.cleandoc(BaseModel.model_dump.__doc__)
+
+
+@pytest.mark.parametrize('method', ['init', 'validate', 'json', 'construct'])
+@pytest.mark.parametrize('private', [False, True])
+def test_root_model_private_slots(method, private):
+    """https://github.com/pydantic/pydantic/issues/13998"""
+
+    class Root(RootModel[int]):
+        pass
+
+    if private:
+
+        class Root(Root):
+            _tag: list[str] = PrivateAttr(default_factory=lambda: ['x'])
+
+    factories = {
+        'init': lambda: Root(1),
+        'validate': lambda: Root.model_validate(1),
+        'json': lambda: Root.model_validate_json('1'),
+        'construct': lambda: Root.model_construct(1),
+    }
+    model = factories[method]()
+    assert model.__dict__ == {'root': 1}
+    assert BaseModel.__dict__['__pydantic_extra__'].__get__(model) is None
+    expected = {'_tag': ['x']} if private else None
+    assert BaseModel.__dict__['__pydantic_private__'].__get__(model) == expected
+
+
+@pytest.mark.parametrize('construct', [False, True])
+def test_root_model_slots_before_post_init(construct):
+    """https://github.com/pydantic/pydantic/issues/13998"""
+
+    class Root(RootModel[int]):
+        _tag: str = PrivateAttr('x')
+
+        def model_post_init(self, context):
+            assert self.__pydantic_extra__ is None
+            assert self.__pydantic_private__ == {'_tag': 'x'}
+            assert '__pydantic_private__' not in self.__dict__
+
+    Root.model_construct(1) if construct else Root.model_validate(1)
+
+
+@pytest.mark.parametrize('modern', [False, True])
+def test_root_model_restore_private_state_without_mutating_input(modern):
+    """https://github.com/pydantic/pydantic/issues/13998"""
+
+    class Root(RootModel[int]):
+        _tag: str = PrivateAttr('x')
+
+    object_dict = {'root': 1, '__pydantic_private__': {'_tag': 'legacy'}}
+    state = {'__dict__': object_dict, '__pydantic_fields_set__': {'root'}}
+    if modern:
+        state['__pydantic_private__'] = {'_tag': 'modern'}
+    original_state = deepcopy(state)
+    restored = Root.__new__(Root)
+    restored.__setstate__(state)
+    assert state == original_state
+    assert restored.__dict__ == {'root': 1}
+    assert restored._tag == ('modern' if modern else 'legacy')
+    assert restored.__pydantic_extra__ is None
+    assert restored.__pydantic_fields_set__ == {'root'}
+
+
+def test_root_model_private_copy_cycles_and_undefined():
+    """https://github.com/pydantic/pydantic/issues/13998"""
+    from pydantic_core import PydanticUndefined
+
+    class Root(RootModel[list[int]]):
+        _items: list[int] = PrivateAttr(default_factory=list)
+        _owner: Any = PrivateAttr()
+
+    model = Root([1])
+    model._owner = model
+    model.__pydantic_private__['_unset'] = PydanticUndefined
+    shallow = model.model_copy()
+    deep = model.model_copy(deep=True)
+    assert shallow.__pydantic_private__ is not model.__pydantic_private__
+    assert shallow._items is model._items
+    assert shallow._owner is model
+    assert shallow.root == model.root and shallow.root is not model.root
+    assert deep._items is not model._items
+    assert deep._owner is deep
+    assert '_unset' not in shallow.__pydantic_private__
+    assert '_unset' not in deep.__pydantic_private__
+    assert '_unset' not in model.__getstate__()['__pydantic_private__']
+
+
+@pytest.mark.parametrize('protocol', range(pickle.HIGHEST_PROTOCOL + 1))
+def test_root_model_private_pickle_protocols(create_module, protocol):
+    """https://github.com/pydantic/pydantic/issues/13998"""
+    module = create_module("""
+from pydantic import RootModel, PrivateAttr
+class Root(RootModel[int]):
+    _tag: list[str] = PrivateAttr(default_factory=lambda: ['x'])
+""")
+    original = module.Root(1)
+    restored = pickle.loads(pickle.dumps(original, protocol=protocol))
+    assert restored == original
+    assert restored.__dict__ == {'root': 1}
+    assert restored._tag == ['x']
+    assert restored._tag is not original._tag
